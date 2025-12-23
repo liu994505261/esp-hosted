@@ -1,0 +1,95 @@
+name: Build ESP-Hosted
+
+on:
+  push:
+    branches: [ master, main ]
+    paths:
+      - 'esp_hosted_ng/esp/esp_driver/network_adapter/**'
+      - 'esp_hosted_ng/host/**'
+  pull_request:
+    branches: [ master, main ]
+    paths:
+      - 'esp_hosted_ng/esp/esp_driver/network_adapter/**'
+      - 'esp_hosted_ng/host/**'
+
+jobs:
+  pre_check:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - name: Check version consistency
+      run: |
+        export HOSTED_NG_PATH=$PWD/esp_hosted_ng
+        .gitlab/ci/check_hosted_ng_version.sh
+
+  build_firmware:
+    runs-on: ubuntu-latest
+    needs: pre_check
+    strategy:
+      matrix:
+        target: [esp32, esp32s2, esp32s3, esp32c2, esp32c3, esp32c6, esp32c5]
+        interface: [sdio, spi]
+        exclude:
+          # 排除不支持的组合
+          - target: esp32s2
+            interface: sdio
+          - target: esp32s3
+            interface: sdio
+          - target: esp32c2
+            interface: sdio
+          - target: esp32c3
+            interface: sdio
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    
+    - name: Setup ESP-IDF
+      uses: espressif/esp-idf-ci-action@v1
+      with:
+        esp_idf_version: v5.5
+        target: ${{ matrix.target }}
+    
+    - name: Build firmware
+      run: |
+        export IDF_TARGET=${{ matrix.target }}
+        .gitlab/ci/build_firmware.sh ${{ matrix.target }} ${{ matrix.interface }}
+    
+    - name: Upload firmware artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: firmware-${{ matrix.target }}-${{ matrix.interface }}
+        path: esp_hosted_ng/esp/esp_driver/network_adapter/build/network_adapter.bin
+
+  build_host:
+    runs-on: ubuntu-latest
+    needs: pre_check
+    strategy:
+      matrix:
+        interface: [sdio, spi]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential linux-headers-$(uname -r)
+    
+    - name: Build host driver
+      run: |
+        cd esp_hosted_ng/host
+        if [ "${{ matrix.interface }}" = "spi" ]; then
+          make target=spi
+        else
+          make
+        fi
+    
+    - name: Upload host artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: host-driver-${{ matrix.interface }}
+        path: esp_hosted_ng/host/*.ko
